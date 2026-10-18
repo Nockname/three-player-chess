@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Three-Player Chess</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Three-Player Chess</h1>
+  </header>
+  <main>
+    <div class="board-wrap">
+      <svg id="board" viewBox="-114 -104 228 208" role="img" aria-label="Three-player chess board"></svg>
+      <div id="promo" class="promo hidden"></div>
+    </div>
+    <aside>
+      <div id="status" class="status"></div>
+      <section>
+        <h2>Players</h2>
+        <div id="players"></div>
+      </section>
+      <section class="controls">
+        <button id="new-game">New game</button>
+        <button id="undo">Undo</button>
+        <label>View
+          <select id="view">
+            <option value="auto">Player to move at bottom</option>
+            <option value="0">White at bottom</option>
+            <option value="1">Red at bottom</option>
+            <option value="2">Black at bottom</option>
+          </select>
+        </label>
+      </section>
+      <section>
+        <h2>Moves</h2>
+        <ol id="log"></ol>
+      </section>
+      <details>
+        <summary>Rules</summary>
+        <ul>
+          <li>White, Red and Black move in turn, counter-clockwise.</li>
+          <li>Pieces move as in normal chess. Lines carry on across the middle into the other players' segments.</li>
+          <li>A diagonal through the very centre continues to the cell directly opposite.</li>
+          <li>Pawns head for the middle and then toward an opponent's back rank. They promote on reaching any opponent's back rank.</li>
+          <li>You can't leave your own king in check. If you're checkmated or have no legal moves, you're out and your pieces leave the board.</li>
+          <li>Moves happen one at a time, so a king can be left exposed to the next player, who may capture it. Losing your king also puts you out.</li>
+          <li>The last player standing wins. Castling works as usual; there's no en passant.</li>
+        </ul>
+      </details>
+    </aside>
+  </main>
+  <script src="engine.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
