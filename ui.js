@@ -542,7 +542,7 @@ function renderOnline() {
   const add = (html) => box.insertAdjacentHTML('beforeend', html);
   if (mode === 'local') {
     add('<div><button id="go-online">Play online</button></div>');
-    add('<div class="muted">Get a link to send to friends so you can play from different computers.</div>');
+    add('<div class="muted">Get a link to send to friends so you can play from different devices.</div>');
     if (netStatus) add(`<div>${netStatus}</div>`);
     document.getElementById('go-online').onclick = goOnline;
     return;

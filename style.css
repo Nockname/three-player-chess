@@ -21,7 +21,7 @@ main {
 }
 
 .board-wrap { position: relative; width: min(92vw, 78vh, 820px); }
-#board { width: 100%; height: auto; display: block; user-select: none; }
+#board { width: 100%; height: auto; display: block; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
 .cell { cursor: pointer; stroke: #0003; stroke-width: .25; }
 .cell.light { fill: #ecd8b6; }
@@ -116,3 +116,10 @@ details ul { padding-left: 18px; line-height: 1.5; }
 #online input { flex: 1; min-width: 0; font: inherit; font-size: 13px; background: #15181c; color: inherit; border: 1px solid #444c55; border-radius: 6px; padding: 5px 8px; }
 #online .muted { color: #9aa4ae; font-size: 13px; }
 .player-row .who { font-size: 13px; color: #9aa4ae; }
+
+@media (max-width: 700px) {
+  header { padding: 10px 16px; }
+  main { padding: 8px 0 24px; gap: 12px; }
+  .board-wrap { width: 100vw; }
+  aside { width: 100%; padding: 0 16px; }
+}
