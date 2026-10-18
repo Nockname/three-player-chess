@@ -110,3 +110,9 @@ details ul { padding-left: 18px; line-height: 1.5; }
 }
 .promo button { font-size: 40px; width: 64px; height: 64px; padding: 0; line-height: 1; }
 .hidden { display: none; }
+
+#online { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #c4ccd4; }
+#online .share { display: flex; gap: 6px; }
+#online input { flex: 1; min-width: 0; font: inherit; font-size: 13px; background: #15181c; color: inherit; border: 1px solid #444c55; border-radius: 6px; padding: 5px 8px; }
+#online .muted { color: #9aa4ae; font-size: 13px; }
+.player-row .who { font-size: 13px; color: #9aa4ae; }

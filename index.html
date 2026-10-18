@@ -17,6 +17,7 @@
     </div>
     <aside>
       <div id="status" class="status"></div>
+      <section id="online"></section>
       <section>
         <h2>Players</h2>
         <div id="players"></div>
@@ -26,7 +27,7 @@
         <button id="undo">Undo</button>
         <label>View
           <select id="view">
-            <option value="auto">Player to move at bottom</option>
+            <option value="auto">Auto</option>
             <option value="0">White at bottom</option>
             <option value="1">Red at bottom</option>
             <option value="2">Black at bottom</option>
@@ -46,11 +47,13 @@
           <li>Pawns head for the middle and then toward an opponent's back rank. They promote on reaching any opponent's back rank.</li>
           <li>You can't leave your own king in check. If you're checkmated or have no legal moves, you're out and your pieces leave the board.</li>
           <li>Moves happen one at a time, so a king can be left exposed to the next player, who may capture it. Losing your king also puts you out.</li>
+          <li>Online: click "Play online" and send the link to two friends. Your tab runs the game, so keep it open until the game is over. Seats nobody has joined can be given to the computer.</li>
           <li>The last player standing wins. Castling works as usual; there's no en passant.</li>
         </ul>
       </details>
     </aside>
   </main>
+  <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
   <script src="engine.js"></script>
   <script src="ui.js"></script>
 </body>

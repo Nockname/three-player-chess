@@ -15,9 +15,27 @@ const NS = 'http://www.w3.org/2000/svg';
 let state;
 let history;
 let selected = null;
-let controllers = ['human', 'cpu', 'cpu'];
 let view = 'auto';
 let aiTimer = null;
+
+// mode is 'local' (everyone on this screen), 'host' (this tab runs an online game)
+// or 'client' (joined someone else's game). Seat kinds: 'human' (this screen),
+// 'cpu', 'remote' (a joined player) and 'open' (waiting for someone to join).
+let mode = 'local';
+let seats = [{ kind: 'human' }, { kind: 'cpu' }, { kind: 'cpu' }];
+let mySeat = null; // client only; null while connecting or when spectating
+let peer = null;
+let hostConn = null; // client only
+let conns = []; // host only: [{ conn, seat, lastSeen }]
+let lastFromHost = 0; // client only
+let hostGone = false; // client only
+
+// WebRTC often doesn't report a peer that closed its tab, so both sides ping and
+// treat a peer that's been silent this long as gone.
+const PING_MS = 2000;
+const TIMEOUT_MS = 8000;
+let shareLink = null;
+let netStatus = '';
 
 // ---------- game flow ----------
 
@@ -30,6 +48,12 @@ function newGame() {
 }
 
 const nextAlive = (p) => [1, 2, 3].map((k) => (p + k) % 3).find((q) => state.alive[q]);
+
+function isMyTurn() {
+  if (state.winner != null) return false;
+  if (mode === 'client') return state.turn === mySeat;
+  return seats[state.turn].kind === 'human';
+}
 
 function eliminate(p, text) {
   state.alive[p] = false;
@@ -45,8 +69,7 @@ function startTurn() {
       state.winner = left[0];
       state.legal = [];
       state.log.push({ sys: true, text: `${PLAYERS[left[0]].name} wins!` });
-      render();
-      return;
+      break;
     }
     const legal = E.legalMoves(state.board, state.turn, state.alive);
     if (legal.length) {
@@ -59,11 +82,25 @@ function startTurn() {
     state.turn = nextAlive(p);
     eliminate(p, mated ? `${name} is checkmated` : `${name} has no legal moves`);
   }
+  changed();
+}
+
+// Redraw, tell joined players, and let the computer move if it's its turn.
+function changed() {
   render();
-  if (controllers[state.turn] === 'cpu') aiTimer = setTimeout(aiMove, 500);
+  broadcast();
+  clearTimeout(aiTimer);
+  if (mode !== 'client' && state.winner == null && seats[state.turn].kind === 'cpu') aiTimer = setTimeout(aiMove, 500);
 }
 
 function makeMove(m) {
+  if (mode === 'client') {
+    hostConn.send({ type: 'move', from: m.from, to: m.to, promo: m.promo || null });
+    selected = null;
+    state.legal = [];
+    render();
+    return;
+  }
   history.push({ board: state.board, turn: state.turn, alive: [...state.alive], logLen: state.log.length, lastMove: state.lastMove });
   const mover = state.turn;
   const victim = state.board[m.to];
@@ -83,7 +120,7 @@ function undo() {
   clearTimeout(aiTimer);
   let snap = history.pop();
   // Step back to the last position where a human was to move.
-  while (history.length && controllers[snap.turn] === 'cpu') snap = history.pop();
+  while (history.length && seats[snap.turn].kind === 'cpu') snap = history.pop();
   state.board = snap.board;
   state.turn = snap.turn;
   state.alive = snap.alive;
@@ -91,6 +128,150 @@ function undo() {
   state.lastMove = snap.lastMove;
   state.winner = null;
   startTurn();
+}
+
+// ---------- online play (PeerJS, host-authoritative) ----------
+
+function randomId() {
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let s = 'tpc-';
+  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function snapshot() {
+  const { board, turn, alive, log, lastMove, winner } = state;
+  return { board, turn, alive, log, lastMove, winner };
+}
+
+function broadcast() {
+  if (mode !== 'host') return;
+  const msg = { type: 'state', state: snapshot(), seats: seats.map((s) => ({ kind: s.kind })) };
+  for (const c of conns) if (c.conn.open) c.conn.send({ ...msg, you: c.seat });
+}
+
+function goOnline() {
+  if (typeof Peer === 'undefined') {
+    netStatus = 'Couldn\'t load the online-play library. Check your connection and reload.';
+    render();
+    return;
+  }
+  mode = 'host';
+  seats = [{ kind: 'human' }, { kind: 'open' }, { kind: 'open' }];
+  view = 'auto';
+  document.getElementById('view').value = 'auto';
+  netStatus = 'Setting up the game…';
+  peer = new Peer(randomId(), { debug: 1 });
+  peer.on('open', (id) => {
+    shareLink = `${location.origin}${location.pathname}?join=${id}`;
+    netStatus = 'Send this link to two friends:';
+    render();
+  });
+  peer.on('connection', (conn) => {
+    conn.on('open', () => onJoin(conn));
+    conn.on('data', (d) => onHostData(conn, d));
+    conn.on('close', () => onLeave(conn));
+  });
+  peer.on('disconnected', () => peer.reconnect());
+  setInterval(() => {
+    for (const c of conns) {
+      if (Date.now() - c.lastSeen > TIMEOUT_MS) onLeave(c.conn);
+      else if (c.conn.open) c.conn.send({ type: 'ping' });
+    }
+  }, PING_MS);
+  peer.on('error', (e) => {
+    netStatus = `Connection problem (${e.type}). Players who already joined can keep playing.`;
+    render();
+  });
+  newGame();
+}
+
+function onJoin(conn) {
+  const seat = seats.findIndex((s) => s.kind === 'open');
+  conns.push({ conn, seat: seat >= 0 ? seat : null, lastSeen: Date.now() });
+  if (seat >= 0) seats[seat] = { kind: 'remote' };
+  changed();
+}
+
+function onLeave(conn) {
+  const entry = conns.find((c) => c.conn === conn);
+  if (!entry) return;
+  conns = conns.filter((c) => c !== entry);
+  conn.close();
+  if (entry.seat != null) seats[entry.seat] = { kind: 'open' };
+  changed();
+}
+
+function onHostData(conn, d) {
+  const entry = conns.find((c) => c.conn === conn);
+  if (entry) entry.lastSeen = Date.now();
+  if (!d || d.type !== 'move' || !entry || entry.seat !== state.turn || state.winner != null) return;
+  const m = state.legal.find((x) => x.from === d.from && x.to === d.to && (x.promo || null) === d.promo);
+  if (m) makeMove(m);
+  else broadcast();
+}
+
+function joinGame(id) {
+  mode = 'client';
+  seats = [{ kind: 'human' }, { kind: 'open' }, { kind: 'open' }];
+  state = { board: E.initialBoard(), turn: 0, alive: [true, true, true], log: [], lastMove: null, winner: null, legal: [] };
+  history = [];
+  if (typeof Peer === 'undefined') {
+    netStatus = 'Couldn\'t load the online-play library. Check your connection and reload.';
+    render();
+    return;
+  }
+  netStatus = 'Connecting to the game…';
+  peer = new Peer({ debug: 1 });
+  peer.on('open', () => {
+    hostConn = peer.connect(id, { reliable: true });
+    hostConn.on('open', () => {
+      netStatus = 'Connected.';
+      lastFromHost = Date.now();
+      const timer = setInterval(() => {
+        if (Date.now() - lastFromHost > TIMEOUT_MS) {
+          clearInterval(timer);
+          hostLost();
+        } else {
+          hostConn.send({ type: 'ping' });
+        }
+      }, PING_MS);
+      render();
+    });
+    hostConn.on('data', onClientData);
+    hostConn.on('close', hostLost);
+  });
+  peer.on('error', (e) => {
+    netStatus = e.type === 'peer-unavailable'
+      ? 'Game not found. The host may have closed their tab.'
+      : `Connection problem (${e.type}).`;
+    render();
+  });
+  render();
+}
+
+function hostLost() {
+  hostGone = true;
+  netStatus = 'Lost the connection to the host. The game has ended.';
+  mySeat = null;
+  state.legal = [];
+  selected = null;
+  render();
+}
+
+function onClientData(d) {
+  lastFromHost = Date.now();
+  if (!d || d.type !== 'state' || hostGone) return;
+  state = { ...d.state, legal: [] };
+  seats = d.seats;
+  mySeat = d.you;
+  if (isMyTurn()) state.legal = E.legalMoves(state.board, state.turn, state.alive);
+  if (!(isMyTurn() && state.board[selected]?.owner === mySeat)) selected = null;
+  render();
+}
+
+function leaveOnline() {
+  location.href = location.pathname;
 }
 
 function cellName(i) {
@@ -135,7 +316,7 @@ function aiMove() {
 // ---------- input ----------
 
 function onCellClick(i) {
-  if (state.winner != null || controllers[state.turn] !== 'human') return;
+  if (!isMyTurn()) return;
   if (selected != null) {
     const ms = state.legal.filter((m) => m.from === selected && m.to === i);
     if (ms.length > 1) return askPromotion(ms);
@@ -214,7 +395,8 @@ function el(tag, attrs, parent) {
 }
 
 function render() {
-  const bottom = view === 'auto' ? (state.winner ?? state.turn) : Number(view);
+  const auto = mode === 'client' ? (mySeat ?? 0) : mode === 'host' ? 0 : (state.winner ?? state.turn);
+  const bottom = view === 'auto' ? auto : Number(view);
   const { cells, at, H } = geometry((-120 * bottom * Math.PI) / 180);
   svg.innerHTML = '';
 
@@ -279,6 +461,9 @@ function render() {
   renderPanel();
 }
 
+
+const SEAT_LABEL = { cpu: 'Computer', remote: 'Online player', open: 'Waiting to join…' };
+
 function renderPanel() {
   const status = document.getElementById('status');
   if (state.winner != null) {
@@ -286,32 +471,48 @@ function renderPanel() {
     status.style.setProperty('--player', PLAYERS[state.winner].fill);
   } else {
     const pl = PLAYERS[state.turn];
+    const kind = seats[state.turn].kind;
     const check = E.inCheck(state.board, state.turn, state.alive) ? ' (in check)' : '';
-    const thinking = controllers[state.turn] === 'cpu' ? ' (computer thinking…)' : '';
-    status.textContent = `${pl.name} to move${check}${thinking}`;
+    let text = `${pl.name} to move${check}`;
+    if (mode !== 'local' && isMyTurn()) text = `Your move${check}`;
+    else if (kind === 'open') text = `Waiting for someone to join as ${pl.name}`;
+    else if (kind === 'cpu') text += ' (computer thinking…)';
+    status.textContent = text;
     status.style.setProperty('--player', pl.fill);
   }
+
+  renderOnline();
 
   const players = document.getElementById('players');
   players.innerHTML = '';
   for (const p of [0, 1, 2]) {
     const pl = PLAYERS[p];
+    const kind = seats[p].kind;
     const row = document.createElement('div');
     row.className = 'player-row';
     if (!state.alive[p]) row.classList.add('out');
     else if (state.winner == null && state.turn === p) row.classList.add('to-move');
     row.innerHTML = `<span class="swatch" style="background:${pl.fill}"></span><span class="name">${pl.name}</span>`;
     if (!state.alive[p]) row.insertAdjacentHTML('beforeend', '<span class="tag">out</span>');
-    const sel = document.createElement('select');
-    sel.innerHTML = '<option value="human">Human</option><option value="cpu">Computer</option>';
-    sel.value = controllers[p];
-    sel.onchange = () => {
-      controllers[p] = sel.value;
-      clearTimeout(aiTimer);
-      if (state.winner == null && state.turn === p && sel.value === 'cpu') aiTimer = setTimeout(aiMove, 300);
-      render();
-    };
-    row.appendChild(sel);
+    // Local games can switch any seat; a host can hand seats nobody has joined to the computer.
+    const options = mode === 'local' ? [['human', 'Human'], ['cpu', 'Computer']]
+      : mode === 'host' && (kind === 'open' || kind === 'cpu') ? [['open', 'Open'], ['cpu', 'Computer']]
+      : null;
+    if (options) {
+      const sel = document.createElement('select');
+      sel.innerHTML = options.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+      sel.value = kind;
+      sel.onchange = () => {
+        seats[p] = { kind: sel.value };
+        changed();
+      };
+      row.appendChild(sel);
+    } else {
+      let who = SEAT_LABEL[kind];
+      if (mode === 'host' && kind === 'human') who = 'You';
+      if (mode === 'client') who = p === mySeat ? 'You' : kind === 'human' ? 'Host' : who;
+      row.insertAdjacentHTML('beforeend', `<span class="who">${who}</span>`);
+    }
     players.appendChild(row);
   }
 
@@ -329,7 +530,38 @@ function renderPanel() {
     log.appendChild(li);
   }
   log.scrollTop = log.scrollHeight;
+
+  document.getElementById('new-game').hidden = mode === 'client';
+  document.getElementById('undo').hidden = mode !== 'local';
   document.getElementById('undo').disabled = history.length === 0;
+}
+
+function renderOnline() {
+  const box = document.getElementById('online');
+  box.innerHTML = '';
+  const add = (html) => box.insertAdjacentHTML('beforeend', html);
+  if (mode === 'local') {
+    add('<div><button id="go-online">Play online</button></div>');
+    add('<div class="muted">Get a link to send to friends so you can play from different computers.</div>');
+    if (netStatus) add(`<div>${netStatus}</div>`);
+    document.getElementById('go-online').onclick = goOnline;
+    return;
+  }
+  add(`<div>${netStatus}</div>`);
+  if (mode === 'host' && shareLink) {
+    add('<div class="share"><input id="share-link" readonly><button id="copy-link">Copy</button></div>');
+    const input = document.getElementById('share-link');
+    input.value = shareLink;
+    input.onclick = () => input.select();
+    document.getElementById('copy-link').onclick = async (e) => {
+      await navigator.clipboard.writeText(shareLink);
+      e.target.textContent = 'Copied';
+    };
+    add('<div class="muted">Keep this tab open: it runs the game.</div>');
+  }
+  if (mode === 'client' && hostConn?.open && mySeat == null) add('<div class="muted">The game is full, so you\'re watching.</div>');
+  add('<div><button id="leave-online">Leave online game</button></div>');
+  document.getElementById('leave-online').onclick = leaveOnline;
 }
 
 document.getElementById('new-game').onclick = newGame;
@@ -339,4 +571,6 @@ document.getElementById('view').onchange = (e) => {
   render();
 };
 
-newGame();
+const joinId = new URLSearchParams(location.search).get('join');
+if (joinId) joinGame(joinId);
+else newGame();
